@@ -17,11 +17,11 @@ Raw datasets → Teacher distillation → Fine-tune student → Compare models
 
 | Script | What it does | GPU |
 |---|---|---|
-| `ingest_data.py` | Downloads datasets to a Modal Volume | None |
-| `distill_teacher.py` | Generates clinical training data via Qwen 72B | A100-80GB |
-| `train_student.py` | Fine-tunes Qwen 1.5B with LoRA (120 steps) | L4 |
-| `test_model.py` | Runs a single query against your specialist | L4 |
-| `compare_models.py` | FastAPI UI to compare specialist vs. base model | L4 |
+| `01_ingest_data.py` | Downloads datasets to a Modal Volume | None |
+| `02_distill_teacher.py` | Generates clinical training data via Qwen 72B | A100-80GB |
+| `03_train_student.py` | Fine-tunes Qwen 1.5B with LoRA (120 steps) | L4 |
+| `04_test_model.py` | Runs a single query against your specialist | L4 |
+| `05_compare_models.py` | FastAPI UI to compare specialist vs. base model | L4 |
 
 ## Setup
 
@@ -51,19 +51,19 @@ Run each step in order:
 
 ```bash
 # Step 1 — Download datasets
-modal run ingest_data.py
+modal run 01_ingest_data.py
 
 # Step 2 — Generate training data via teacher model (~1-2 hours)
-modal run distill_teacher.py
+modal run 02_distill_teacher.py
 
 # Step 3 — Fine-tune the specialist (~20 minutes)
-modal run train_student.py
+modal run 03_train_student.py
 
 # Step 4 — Test a single query
-modal run test_model.py
+modal run 04_test_model.py
 
 # Step 5 — Launch the comparison web UI
-modal serve compare_models.py
+modal serve 05_compare_models.py
 ```
 
 ## Concepts Demonstrated
