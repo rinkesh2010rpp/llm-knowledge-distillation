@@ -1,0 +1,12 @@
+modal
+datasets
+huggingface_hub
+pandas
+vllm==0.6.3
+hf_transfer
+unsloth
+torch
+transformers
+fastapi[standard]
+peft
+trl

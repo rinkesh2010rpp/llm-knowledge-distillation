@@ -1,0 +1,17 @@
+# Model weights (too large for GitHub — host on Hugging Face Hub instead)
+clinical_specialist_model/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+env/
+
+# Modal
+.modal.toml
+
+# OS
+.DS_Store
+Thumbs.db
