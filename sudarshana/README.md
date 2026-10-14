@@ -9,9 +9,12 @@ Sudarshana logs every model call (input, DeepSeek V4 Flash's reply, reasoning, t
 | 1 | `01_build_dataset.py` | Logs → train / val / test JSONL (runs locally) |
 | 2 | `02_download_model.py` | Base model (Qwen3.6-35B-A3B) → `sudarshana-distill` Volume, on a CPU container |
 | 3 | `03_train_sft.py` | bf16 LoRA SFT on an H200, in resumable 2-hour slices |
-| 4 | *(next)* | Judge: score the trained model against DeepSeek on test |
-| 5 | *(if needed)* | Single-step RL (GRPO) with the judge as reward |
-| 6 | *(later)* | Serve with vLLM; shadow DeepSeek before switching |
+| 4 | `04_validate.py` | Quick check on val: loss split by reasoning / reply / tool calls, base vs. trained, plus a few generations |
+| 5 | `05_merge_adapter.py` | Merge a run's LoRA into the base model, for vLLM |
+| 6 | `06_generate.py` | vLLM: each model makes every test decision itself |
+| 7 | `07_judge.py` | LLM judge (Claude Haiku 5.5 via OpenRouter) compares each decision with DeepSeek's |
+| 8 | *(if needed)* | Single-step RL (GRPO) with the judge as reward |
+| 9 | *(later)* | Serve with vLLM; shadow DeepSeek before switching |
 
 ## Step 1: build the dataset
 
@@ -77,3 +80,35 @@ Each run:
 - uses a constant learning rate after warmup, so slices can be chained.
 
 Rerun the same command to continue from where the last run stopped. Progress is in `/vol/runs/<run-name>/log.jsonl` and `val.jsonl`.
+
+## Steps 4–7: evaluate
+
+```bash
+modal run --detach 04_validate.py --run-name run1
+```
+
+```bash
+modal run --detach 05_merge_adapter.py --run-name run1
+```
+
+```bash
+MSYS_NO_PATHCONV=1 modal volume put sudarshana-distill data/test.jsonl /data/test.jsonl
+```
+
+```bash
+modal run --detach 06_generate.py --model run1 --split test
+```
+
+```bash
+modal run 07_judge.py --action run --model run1 --split test
+```
+
+`06_generate.py` takes `--model base` for the untrained model. The judge needs `OPENROUTER_API_KEY` in a `.env` in this folder (git-ignored; keep only that key in it, since Modal uploads the whole file).
+
+How the judge works:
+
+- It sees the agent's full system prompt, the message that started the turn, the conversation so far (very long tool results trimmed), and two candidate next steps: DeepSeek's and the model's.
+- Both answers are shown the same way (the action and any message, no reasoning), identical answers are scored a tie without asking, and every pair is judged twice with A and B swapped.
+- `--action submit` / `--action collect` use OpenRouter's Batch API instead: half the price, results within 24 hours.
+
+Choosing the judge: on 15 decisions graded blind as a reference, Claude Haiku 5.5 agreed 11/15 (and 73–80% with itself when A/B were swapped). Jev, TypeSafe's decision model, agreed 5/15 and only 47% with itself, so it was dropped. Avoid DeepSeek as the judge (it would be grading its own answers) and Qwen (the student's own family).
