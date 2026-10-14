@@ -7,6 +7,9 @@ with the same chat template as training.
     modal run --detach 06_generate.py --model base --split test
     modal run --detach 06_generate.py --model run1 --split test
 
+`--only-kind summarizer --max-tokens 24576` regenerates just the history
+summaries, which run ~12K tokens (DeepSeek's median) and overflow the default cap.
+
 `--model base` serves the downloaded model; any other name serves
 /vol/models/<name>-merged (from 05_merge_adapter.py). Output:
 /vol/eval/<split>/<model>.jsonl.
@@ -23,7 +26,7 @@ image = modal.Image.from_registry("nvidia/cuda:13.0.3-devel-ubuntu24.04", add_py
 
 
 @app.function(image=image, gpu="H200", volumes={"/vol": volume}, memory=65536, timeout=90 * 60)
-def generate(model: str, split: str, max_tokens: int, limit: int):
+def generate(model: str, split: str, max_tokens: int, limit: int, only_kind: str):
     import json
     import os
     import time
@@ -37,6 +40,8 @@ def generate(model: str, split: str, max_tokens: int, limit: int):
     tok = AutoTokenizer.from_pretrained(MODEL_DIR)
     with open(f"/vol/data/{split}.jsonl", encoding="utf-8") as fh:
         rows = [json.loads(line) for line in fh]
+    if only_kind:
+        rows = [ex for ex in rows if ex["kind"] == only_kind]
     if limit:
         rows = rows[:limit]
     # The file is grouped by turn, so consecutive prompts share long prefixes
@@ -64,7 +69,7 @@ def generate(model: str, split: str, max_tokens: int, limit: int):
 
     out_dir = f"/vol/eval/{split}"
     os.makedirs(out_dir, exist_ok=True)
-    suffix = f"-first{limit}" if limit else ""
+    suffix = (f"-{only_kind}" if only_kind else "") + (f"-first{limit}" if limit else "")
     new_tokens = 0
     with open(f"{out_dir}/{model}{suffix}.jsonl", "w", encoding="utf-8") as fh:
         for ex, out in zip(rows, outputs):
@@ -80,6 +85,6 @@ def generate(model: str, split: str, max_tokens: int, limit: int):
 
 
 @app.local_entrypoint()
-def main(model: str = "base", split: str = "test", max_tokens: int = 8192, limit: int = 0):
-    call = generate.spawn(model, split, max_tokens, limit)
+def main(model: str = "base", split: str = "test", max_tokens: int = 8192, limit: int = 0, only_kind: str = ""):
+    call = generate.spawn(model, split, max_tokens, limit, only_kind)
     print(f"Spawned {call.object_id}")

@@ -13,7 +13,7 @@ Sudarshana logs every model call (input, DeepSeek V4 Flash's reply, reasoning, t
 | 5 | `05_merge_adapter.py` | Merge a run's LoRA into the base model, for vLLM |
 | 6 | `06_generate.py` | vLLM: each model makes every test decision itself |
 | 7 | `07_judge.py` | LLM judge (Claude Haiku 5.5 via OpenRouter) compares each decision with DeepSeek's |
-| 8 | *(if needed)* | Single-step RL (GRPO) with the judge as reward |
+| 8 | `08_train_grpo.py` | GRPO with the judge as reward (work in progress, see below) |
 | 9 | *(later)* | Serve with vLLM; shadow DeepSeek before switching |
 
 ## Step 1: build the dataset
@@ -112,3 +112,24 @@ How the judge works:
 - `--action submit` / `--action collect` use OpenRouter's Batch API instead: half the price, results within 24 hours.
 
 Choosing the judge: on 15 decisions graded blind as a reference, Claude Haiku 5.5 agreed 11/15 (and 73–80% with itself when A/B were swapped). Jev, TypeSafe's decision model, agreed 5/15 and only 47% with itself, so it was dropped. Avoid DeepSeek as the judge (it would be grading its own answers) and Qwen (the student's own family).
+
+## Step 8: GRPO (work in progress)
+
+Test results so far (489 held-out decisions, Haiku judge; win / tie / loss against DeepSeek, then net = win − loss):
+
+| Model | Win | Tie | Loss | Net |
+|---|---|---|---|---|
+| Base Qwen3.6-35B-A3B | 14.7% | 41.1% | 44.2% | −30 |
+| Run 1 (SFT) | 15.7% | 47.4% | 37.0% | −21 |
+
+SFT turned losses into ties; it did not add wins. GRPO is the next lever: the model writes several answers per situation, the judge scores each against DeepSeek's, and the better ones are reinforced.
+
+`08_train_grpo.py` uses Unsloth's `fast_inference=True`. vLLM and the trainer share one copy of the weights, including the MoE experts with LoRA on them (Unsloth ≥ 2026.10.3), so it needs one GPU and no weight syncing. The reward comes from `judge_core.py`, the same code `07_judge.py` evaluates with. It is graded by the judge's 1–5 score gap rather than win/tie/loss, so a group where every answer loses still has a signal.
+
+What the H200 spikes showed:
+
+- One full step runs at 94K context: generating 8 answers took ~291 s, judging ~7 s, training ~147 s.
+- Step 2 runs out of memory. Just after generation, the trainer allocates ~11.5 GB for full-sequence log-probs while vLLM still holds its memory. Standby mode frees vLLM's memory only during training, so it doesn't help at that point.
+- Gotchas: set `finetune_vision_layers=False` (the checkpoint includes a vision encoder); install vLLM before Unsloth in the image; Unsloth disables standby for multimodal checkpoints, so force it with `UNSLOTH_VLLM_STANDBY_VISION=1`.
+
+Next: chunked log-probs (`unsloth_num_chunks`), a ~48K cap on situation length, or a B300.
