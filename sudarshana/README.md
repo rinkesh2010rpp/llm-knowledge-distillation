@@ -13,7 +13,7 @@ Sudarshana logs every model call (input, DeepSeek V4 Flash's reply, reasoning, t
 | 5 | `05_merge_adapter.py` | Merge a run's LoRA into the base model, for vLLM |
 | 6 | `06_generate.py` | vLLM: each model makes every test decision itself |
 | 7 | `07_judge.py` | LLM judge (Claude Haiku 5.5 via OpenRouter) compares each decision with DeepSeek's |
-| 8 | `08_train_grpo.py` | GRPO with the judge as reward (work in progress, see below) |
+| 8 | `08_train_grpo.py` | GRPO with the judge as reward, on top of run 1 |
 | 9 | *(later)* | Serve with vLLM; shadow DeepSeek before switching |
 
 ## Step 1: build the dataset
@@ -113,9 +113,9 @@ How the judge works:
 
 Choosing the judge: on 15 decisions graded blind as a reference, Claude Haiku 5.5 agreed 11/15 (and 73–80% with itself when A/B were swapped). Jev, TypeSafe's decision model, agreed 5/15 and only 47% with itself, so it was dropped. Avoid DeepSeek as the judge (it would be grading its own answers) and Qwen (the student's own family).
 
-## Step 8: GRPO (work in progress)
+## Step 8: GRPO
 
-Test results so far (489 held-out decisions, Haiku judge; win / tie / loss against DeepSeek, then net = win − loss):
+Test results before GRPO (489 held-out decisions, Haiku judge; win / tie / loss against DeepSeek, then net = win − loss):
 
 | Model | Win | Tie | Loss | Net |
 |---|---|---|---|---|
@@ -139,3 +139,28 @@ The B200 test (8 answers per situation, 23 steps): median ~96 s per step, peak 1
 ```bash
 modal run --detach 08_train_grpo.py --run-name grpo-run1
 ```
+
+## Results (paused 2026-10-15)
+
+`grpo-run1`: 144 steps in 171 min on a B200 (~$18), no errors. Held-out reward was flat within noise (0.471 → 0.488).
+
+Final test results (489 held-out decisions, Haiku judge, against DeepSeek):
+
+| Model | Win | Tie | Loss | Net |
+|---|---|---|---|---|
+| Base Qwen3.6-35B-A3B | 14.7% | 41.1% | 44.2% | −30 |
+| Run 1 (SFT) | 15.7% | 47.4% | 37.0% | −21 |
+| GRPO (run 1 + 144 steps) | 16.5% | 48.1% | 35.4% | −19 |
+
+- **GRPO vs. run 1:** better on 77 decisions, worse on 71 (z = 0.49). The difference is noise.
+- **GRPO vs. base:** better on 111 decisions, worse on 63 (z = 3.6). This gain comes from SFT.
+- **By slice:** Telegram went from −24 to −9 and subagent from −69 to −38, but both samples are small (45 and 13 decisions). Main agent: −17 → −15. Summaries: −63 → −70.
+
+Both trained models are still well behind DeepSeek. The pipeline works end to end. Further gains would need many more GRPO steps on situations where run 1 loses, a larger student model, or both.
+
+Saved on the `sudarshana-distill` Volume (index in `/models/MODELS.md`):
+
+- `/models/Qwen3.6-35B-A3B`: the base model
+- `/models/run1-merged`: SFT, from `/runs/run1/adapter`
+- `/models/grpo-run1-merged`: run 1 + GRPO, from `/runs/grpo-run1/adapter` (`05_merge_adapter.py --run-name grpo-run1 --base run1`)
+- `/eval/test/*.jsonl`: generations and judge verdicts for each model

@@ -1,9 +1,13 @@
-"""Merge a run's LoRA into the base model, so vLLM can serve it as a plain model.
+"""Merge a run's LoRA into its base model, so vLLM can serve it as a plain model.
 
 vLLM's LoRA support for MoE expert weights is the least mature part, so we
 serve a merged copy instead: /vol/models/<run-name>-merged.
 
     modal run --detach 05_merge_adapter.py --run-name run1
+    modal run --detach 05_merge_adapter.py --run-name grpo-run1 --base run1
+
+`--base` is the model the LoRA was trained on: `base` (the downloaded model,
+for SFT runs) or a merged run (GRPO trains on top of merged run 1).
 """
 import modal
 
@@ -23,7 +27,7 @@ image = (
 
 
 @app.function(image=image, gpu="H200", volumes={"/vol": volume}, memory=131072, timeout=45 * 60)
-def merge(run_name: str):
+def merge(run_name: str, base: str):
     import json
     import os
     import shutil
@@ -34,11 +38,12 @@ def merge(run_name: str):
 
     run_dir = f"/vol/runs/{run_name}"
     out_dir = f"/vol/models/{run_name}-merged"
+    base_dir = MODEL_DIR if base == "base" else f"/vol/models/{base}-merged"
     with open(f"{run_dir}/adapter/adapter_config.json") as fh:
         cfg = json.load(fh)
 
     model, processor = FastModel.from_pretrained(
-        model_name=MODEL_DIR, max_seq_length=MAX_SEQ, load_in_4bit=False, load_in_16bit=True, full_finetuning=False,
+        model_name=base_dir, max_seq_length=MAX_SEQ, load_in_4bit=False, load_in_16bit=True, full_finetuning=False,
     )
     model = FastModel.get_peft_model(
         model,
@@ -50,7 +55,11 @@ def merge(run_name: str):
         random_state=3407,
         max_seq_length=MAX_SEQ,
     )
-    set_peft_model_state_dict(model, load_file(f"{run_dir}/adapter/adapter_model.safetensors"))
+    result = set_peft_model_state_dict(model, load_file(f"{run_dir}/adapter/adapter_model.safetensors"))
+    # Every saved LoRA weight must land on a module here, or the merge is silently a no-op.
+    unexpected = list(getattr(result, "unexpected_keys", []) or [])
+    if unexpected:
+        raise RuntimeError(f"{len(unexpected)} adapter weights didn't match the model, e.g. {unexpected[:3]}")
     model.save_pretrained_merged(out_dir, processor, save_method="merged_16bit")
 
     # Keep the exact chat template and tokenizer files we trained and validated with.
@@ -58,10 +67,10 @@ def merge(run_name: str):
         if name.endswith((".json", ".jinja", ".txt")) and not name.startswith("model") and name != "config.json":
             shutil.copy(f"{MODEL_DIR}/{name}", f"{out_dir}/{name}")
     volume.commit()
-    print(f"Merged {run_name} into {out_dir}: {sorted(os.listdir(out_dir))}")
+    print(f"Merged {run_name} onto {base_dir} into {out_dir}: {sorted(os.listdir(out_dir))}")
 
 
 @app.local_entrypoint()
-def main(run_name: str = "run1"):
-    call = merge.spawn(run_name)
+def main(run_name: str = "run1", base: str = "base"):
+    call = merge.spawn(run_name, base)
     print(f"Spawned {call.object_id}")
