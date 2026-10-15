@@ -126,10 +126,16 @@ SFT turned losses into ties; it did not add wins. GRPO is the next lever: the mo
 
 `08_train_grpo.py` uses Unsloth's `fast_inference=True`. vLLM and the trainer share one copy of the weights, including the MoE experts with LoRA on them (Unsloth ≥ 2026.10.3), so it needs one GPU and no weight syncing. The reward comes from `judge_core.py`, the same code `07_judge.py` evaluates with. It is graded by the judge's 1–5 score gap rather than win/tie/loss, so a group where every answer loses still has a signal.
 
-What the H200 spikes showed:
+What it took to get running (every failure was out of memory):
 
-- One full step runs at 94K context: generating 8 answers took ~291 s, judging ~7 s, training ~147 s.
-- Step 2 runs out of memory. Just after generation, the trainer allocates ~11.5 GB for full-sequence log-probs while vLLM still holds its memory. Standby mode frees vLLM's memory only during training, so it doesn't help at that point.
-- Gotchas: set `finetune_vision_layers=False` (the checkpoint includes a vision encoder); install vLLM before Unsloth in the image; Unsloth disables standby for multimodal checkpoints, so force it with `UNSLOTH_VLLM_STANDBY_VISION=1`.
+- **Root cause:** Unsloth's autotuner batched several 40–94K-token answers into one no-grad log-prob pass. It sized the batch with an estimate that ignores the model's own activations, which caused the recurring 11.45 GB allocation failure. On a B300 the same failure surfaced as "illegal memory access", with 18 MB free. The fix is `unsloth_grpo_mini_batch = num_generations`, one answer per pass.
+- **GPU:** B200. An H200 is too small at 94K: vLLM needs ~85 GB besides its cache and training ~60 GB. A B300 (sm_103) is not in Unsloth's tuned MoE kernel list and used ~3× the memory.
+- **vLLM:** a fixed 55% share with standby off. Unsloth disables standby for multimodal checkpoints, and forcing it on didn't free memory.
+- **Gotchas:** `finetune_vision_layers=False`; install vLLM before Unsloth; skip situations where DeepSeek's answer is longer than the answer cap, or long-but-correct answers get scored 0.
+- `--diagnose` copies the full console to the Volume (Modal's logs expire) and records GPU memory at every phase.
 
-Next: chunked log-probs (`unsloth_num_chunks`), a ~48K cap on situation length, or a B300.
+The B200 test (8 answers per situation, 23 steps): median ~96 s per step, peak 141.5 GB, held-out reward flat at 0.48 ± 0.02 at lr 5e-6. The defaults are now the first real run: 150 steps, 4 answers, lr 1e-5, β = 0, answers up to 8K tokens, a held-out check every 25 steps.
+
+```bash
+modal run --detach 08_train_grpo.py --run-name grpo-run1
+```
